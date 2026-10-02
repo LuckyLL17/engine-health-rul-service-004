@@ -1,8 +1,11 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
-import { assessEngine, maintenanceWindows, predictRul, validateTelemetry } from './health.js';
+import { assessEngine, predictRul, simulateMaintenance, validateTelemetry } from './health.js';
 import { LocalStore } from './store.js';
-import { Engine, HealthAssessment, MaintenanceEvent, ModelVersion, RulPrediction, TelemetrySample } from './types.js';
+import { Component, Engine, HealthAssessment, MaintenanceAction, MaintenanceEvent, ModelVersion, RulPrediction, TelemetrySample } from './types.js';
+
+const componentValues: Component[] = ['hot_section', 'compressor', 'bearing', 'lubrication'];
+const actionValues: MaintenanceAction[] = ['inspection', 'replacement', 'repair', 'calibration'];
 
 export async function createApp(store = new LocalStore()) {
   await store.init();
@@ -24,7 +27,22 @@ export async function createApp(store = new LocalStore()) {
   app.post('/api/engines/:id/health-assessment', async request => { const id = (request.params as { id: string }).id; const engine = requireEngine(id); const body = (request.body ?? {}) as { modelId?: string; flightId?: string }; const rows = store.telemetry.filter(item => item.engineId === id && (!body.flightId || item.flightId === body.flightId)); if (!rows.length) fail('telemetry_not_found', 422); const assessment = assessEngine(engine, rows, findModel(body.modelId), store.maintenance.filter(item => item.engineId === id).length); engine.currentHealthScore = assessment.healthScore; engine.status = assessment.status; engine.lastAssessmentAt = assessment.createdAt; store.addAssessment(assessment); store.log('health_assessment', id, { assessmentId: assessment.assessmentId, modelVersion: assessment.modelVersion }); await store.persist(); return assessment; });
   app.post('/api/engines/:id/rul-prediction', async request => { const id = (request.params as { id: string }).id; const engine = requireEngine(id); const assessment = requireAssessment(id); const body = (request.body ?? {}) as { horizonCycles?: number; modelId?: string }; const prediction = predictRul(engine, assessment, Math.max(30, Math.min(body.horizonCycles ?? 240, 2000)), findModel(body.modelId)); store.addPrediction(prediction); store.log('rul_prediction', id, { predictionId: prediction.predictionId, estimatedRemainingCycles: prediction.estimatedRemainingCycles }); await store.persist(); return prediction; });
   app.post('/api/engines/:id/replay', async request => { const id = (request.params as { id: string }).id; requireEngine(id); const rows = store.telemetry.filter(item => item.engineId === id).sort((a, b) => a.timestamp.localeCompare(b.timestamp)); const body = (request.body ?? {}) as { speed?: number; cursor?: number }; return { id: `REPLAY-${Date.now()}`, engineId: id, status: 'ready', speed: body.speed ?? 1, cursor: body.cursor ?? 0, eventCount: rows.length, next: rows[body.cursor ?? 0] }; });
-  app.post('/api/engines/:id/maintenance-simulation', async request => { const id = (request.params as { id: string }).id; requireEngine(id); const prediction = requirePrediction(id); const body = (request.body ?? {}) as { delayCycles?: number }; const delay = Math.max(0, body.delayCycles ?? 0); return { engineId: id, delayCycles: delay, windows: maintenanceWindows({ ...prediction, estimatedRemainingCycles: prediction.estimatedRemainingCycles - delay, lowerBound: Math.max(1, prediction.lowerBound - delay), upperBound: Math.max(1, prediction.upperBound - delay) }), impact: { additionalRisk: Math.min(100, Math.round(delay / Math.max(prediction.estimatedRemainingCycles, 1) * 100)), recommendation: delay > prediction.lowerBound ? '延后超过寿命下界，不建议执行' : '当前延后仍在可评估范围内' } }; });
+  app.post('/api/engines/:id/maintenance-simulation', async request => {
+    const id = (request.params as { id: string }).id;
+    requireEngine(id);
+    const prediction = requirePrediction(id);
+    const body = (request.body ?? {}) as { delayCycles?: number; component?: Component; action?: MaintenanceAction };
+    if (body.component !== undefined && !componentValues.includes(body.component)) fail(`invalid component: ${body.component}`, 400);
+    if (body.action !== undefined && !actionValues.includes(body.action)) fail(`invalid action: ${body.action}`, 400);
+    if (body.delayCycles !== undefined && (typeof body.delayCycles !== 'number' || !Number.isFinite(body.delayCycles))) fail('delayCycles must be a finite number', 400);
+    // 纯只读推演：不落库、不写审计、不改动预测或维护历史
+    return simulateMaintenance(id, prediction, {
+      delayCycles: body.delayCycles,
+      component: body.component,
+      action: body.action,
+      history: store.maintenance.filter(item => item.engineId === id)
+    });
+  });
   app.post('/api/models/compare', async request => { const body = request.body as { engineId: string; modelIds?: string[] }; const engine = requireEngine(body.engineId); const rows = store.telemetry.filter(item => item.engineId === body.engineId); return (body.modelIds ?? store.models.map(item => item.id)).map(id => { const model = findModel(id); const result = assessEngine(engine, rows, model, store.maintenance.filter(item => item.engineId === engine.id).length); return { modelId: model.id, label: model.label, healthScore: result.healthScore, status: result.status, dataQuality: result.dataQuality.score, degradationSlope: result.indicators.degradationSlope }; }); });
   app.post('/api/maintenance-events', async request => { const event = request.body as MaintenanceEvent; requireEngine(event.engineId); store.addMaintenance(event); store.log('maintenance_event', event.engineId, { eventId: event.id, component: event.component }); await store.persist(); return event; });
   app.get('/api/engines/:id/risk-events', async request => { const id = (request.params as { id: string }).id; return store.assessments.filter(item => item.engineId === id).flatMap(item => item.anomalies); });

@@ -106,6 +106,43 @@ export type ReplayJob = {
   latest?: TelemetrySample;
 };
 
+export type MaintenanceAction = MaintenanceEvent['action'];
+
+export type MaintenanceWindow = {
+  window: string;
+  startCycle: number;
+  endCycle: number;
+  priority: string;
+  reason: string;
+  breached?: boolean;
+};
+
+export type MaintenanceSimulationOptions = {
+  delayCycles?: number;
+  component?: Component;
+  action?: MaintenanceAction;
+  history?: MaintenanceEvent[];
+};
+
+export type MaintenanceSimulationResult = {
+  engineId: string;
+  delayCycles: number;
+  component?: Component;
+  action?: MaintenanceAction;
+  safetyLowerBoundCrossed: boolean;
+  windows: MaintenanceWindow[];
+  adjusted?: {
+    estimatedRemainingCycles: number;
+    lowerBound: number;
+    upperBound: number;
+    extensionCycles: number;
+    riskReduction: number;
+    netAdditionalRisk: number;
+  };
+  impact: { additionalRisk: number; recommendation: string };
+  basis?: string[];
+};
+
 export type ModelVersion = {
   id: string;
   label: string;

@@ -60,3 +60,20 @@ curl -X POST http://127.0.0.1:6195/api/engines/ENG-DEMO-001/rul-prediction \
   -H 'content-type: application/json' \
   -d '{"horizonCycles":120}'
 ```
+
+## 维护窗口推演
+
+`POST /api/engines/:id/maintenance-simulation` 为**只读**推演，不写入业务状态或审计日志。
+
+- 旧客户端仅传 `delayCycles`：响应结构与文案保持兼容；延后超过安全下界时，窗口周期全部收敛为非负（0 表示立即到期），并返回 `safetyLowerBoundCrossed: true` 及一个 `breached: true` 的“安全下界越界窗口”。
+- 传入 `component`（`hot_section` / `compressor` / `bearing` / `lubrication`）和 `action`（`inspection` / `replacement` / `repair` / `calibration`）后，结合该发动机维护历史修正收益，返回：
+  - `adjusted`：动作后的剩余寿命、上下界、寿命延长循环数、风险消减与净增量风险
+  - `windows`：基于调整后寿命的非负维护窗口，越界时前置显式预警窗口
+  - `impact.recommendation`：是否可延后、可接受延后上限及瓶颈部件提示
+  - `basis`：历史折扣、重复维修、非瓶颈折算等推演依据
+
+```bash
+curl -X POST http://127.0.0.1:6195/api/engines/ENG-DEMO-001/maintenance-simulation \
+  -H 'content-type: application/json' \
+  -d '{"delayCycles":10,"component":"compressor","action":"replacement"}'
+```

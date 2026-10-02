@@ -17,7 +17,7 @@
 - 预测置信区间与解释性证据
 - 维修事件回灌和风险修正
 - 传感器数据按时间顺序重放
-- 维护窗口推演
+- 维护窗口推演（只读，支持部件 + 维护动作与维护历史修正；仅传 delayCycles 的旧客户端保持兼容）
 - 模型版本比较
 - 告警事件、审计轨迹和本地结果导出
 
@@ -59,4 +59,17 @@ curl http://127.0.0.1:6195/api/engines/ENG-DEMO-001/health-assessment
 curl -X POST http://127.0.0.1:6195/api/engines/ENG-DEMO-001/rul-prediction \
   -H 'content-type: application/json' \
   -d '{"horizonCycles":120}'
+# 旧客户端：只传 delayCycles（响应仍含 windows / impact）
+curl -X POST http://127.0.0.1:6195/api/engines/ENG-DEMO-001/maintenance-simulation \
+  -H 'content-type: application/json' \
+  -d '{"delayCycles":10}'
+# 部件 + 维护动作试算：返回调整后的风险、窗口、延寿循环数与建议（纯只读，不落盘、不写审计）
+curl -X POST http://127.0.0.1:6195/api/engines/ENG-DEMO-001/maintenance-simulation \
+  -H 'content-type: application/json' \
+  -d '{"delayCycles":5,"component":"bearing","action":"replacement"}'
 ```
+
+`component` 可选 `hot_section | compressor | bearing | lubrication`，`action` 可选
+`inspection | calibration | repair | replacement`，二者必须同时提供。当延后循环数超过
+RUL 安全下界时，窗口循环值仍钳制为非负，并通过 `adjustedRul.safetyLowerBoundBreached`、
+`cyclesPastSafetyLowerBound` 和越界窗口明确标识。
